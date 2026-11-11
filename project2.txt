@@ -1,0 +1,324 @@
+
+# ==========================================================
+# PROJECT 2: SPAM EMAIL CLASSIFIER USING MACHINE LEARNING
+# Dataset: Enron Spam Email Dataset
+# Algorithms: TF-IDF + Multinomial Naive Bayes
+# ==========================================================
+
+# 1. INSTALL AND IMPORT LIBRARIES
+
+import sys
+import subprocess
+
+subprocess.check_call([
+    sys.executable, "-m", "pip", "install",
+    "pandas", "numpy", "matplotlib",
+    "scikit-learn", "nltk", "joblib", "requests"
+])
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import re
+import nltk
+import requests
+import zipfile
+import io
+import joblib
+
+from nltk.corpus import stopwords
+from nltk.stem import PorterStemmer
+
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    ConfusionMatrixDisplay
+)
+
+print("Libraries imported successfully!")
+
+
+# 2. DOWNLOAD THE EMAIL DATASET
+
+print("\nDownloading Enron Email Dataset...")
+
+url = "https://github.com/MWiechmann/enron_spam_data/raw/master/enron_spam_data.zip"
+
+response = requests.get(url, timeout=120)
+response.raise_for_status()
+
+with zipfile.ZipFile(io.BytesIO(response.content)) as zip_file:
+    csv_files = [
+        name for name in zip_file.namelist()
+        if name.lower().endswith(".csv")
+    ]
+
+    if not csv_files:
+        raise ValueError("No CSV file found in the downloaded dataset.")
+
+    with zip_file.open(csv_files[0]) as file:
+        df = pd.read_csv(file)
+
+print("Dataset downloaded successfully!")
+print("Dataset Shape:", df.shape)
+print("Dataset Columns:", list(df.columns))
+
+
+# 3. PREPARE THE DATASET
+
+df.columns = df.columns.str.strip()
+
+# Find the label column
+label_candidates = ["Spam/Ham", "label", "Category", "class"]
+
+label_column = next(
+    (col for col in label_candidates if col in df.columns),
+    None
+)
+
+if label_column is None:
+    raise ValueError("Could not find the email label column.")
+
+# Find email subject and message columns
+subject_column = next(
+    (col for col in df.columns if col.lower() == "subject"),
+    None
+)
+
+message_column = next(
+    (col for col in df.columns if col.lower() == "message"),
+    None
+)
+
+if message_column is None:
+    raise ValueError("Could not find the email message column.")
+
+if subject_column:
+    df["email_text"] = (
+        df[subject_column].fillna("").astype(str)
+        + " "
+        + df[message_column].fillna("").astype(str)
+    )
+else:
+    df["email_text"] = df[message_column].fillna("").astype(str)
+
+df["label"] = df[label_column].astype(str).str.strip().str.lower()
+
+# Keep only spam and ham emails
+df = df[df["label"].isin(["spam", "ham"])].copy()
+
+df = df.dropna(subset=["email_text"])
+df = df[df["email_text"].str.strip() != ""]
+df = df.drop_duplicates(subset=["email_text"])
+
+print("\nDataset prepared successfully!")
+print(df["label"].value_counts())
+
+
+# 4. VISUALIZE SPAM AND HAM EMAILS
+
+df["label"].value_counts().plot(
+    kind="bar",
+    figsize=(6, 4)
+)
+
+plt.title("Spam vs Ham Email Distribution")
+plt.xlabel("Email Category")
+plt.ylabel("Number of Emails")
+plt.xticks(rotation=0)
+plt.show()
+
+
+# 5. TEXT PREPROCESSING
+
+nltk.download("stopwords", quiet=True)
+
+stop_words = set(stopwords.words("english"))
+stemmer = PorterStemmer()
+
+def clean_text(text):
+
+    text = str(text).lower()
+
+    # Remove URLs
+    text = re.sub(r"http\S+|www\S+", " ", text)
+
+    # Remove email addresses
+    text = re.sub(r"\S+@\S+", " ", text)
+
+    # Keep letters and spaces
+    text = re.sub(r"[^a-z\s]", " ", text)
+
+    # Split into words
+    words = text.split()
+
+    # Remove stopwords and stem words
+    words = [
+        stemmer.stem(word)
+        for word in words
+        if word not in stop_words and len(word) > 1
+    ]
+
+    return " ".join(words)
+
+
+print("\nText preprocessing function created!")
+
+
+# 6. CONVERT TEXT INTO NUMERICAL FEATURES USING TF-IDF
+
+X = df["email_text"]
+y = df["label"]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+    test_size=0.2,
+    random_state=42,
+    stratify=y
+)
+
+print("\nTraining samples:", len(X_train))
+print("Testing samples:", len(X_test))
+
+
+# 7. BUILD MACHINE LEARNING PIPELINE
+
+model = Pipeline([
+    (
+        "tfidf",
+        TfidfVectorizer(
+            preprocessor=clean_text,
+            ngram_range=(1, 2),
+            max_features=30000,
+            min_df=2
+        )
+    ),
+
+    (
+        "classifier",
+        MultinomialNB(alpha=0.5)
+    )
+])
+
+print("\nSpam Email Classification Model Created!")
+
+
+# 8. TRAIN THE MODEL
+
+print("\nTraining the model...")
+
+model.fit(X_train, y_train)
+
+print("Model training completed successfully!")
+
+
+# 9. EVALUATE THE MODEL
+
+y_pred = model.predict(X_test)
+
+accuracy = accuracy_score(y_test, y_pred)
+
+print("\n========== MODEL RESULTS ==========")
+
+print("Test Accuracy:", accuracy * 100, "%")
+
+print("\nClassification Report:")
+
+print(
+    classification_report(
+        y_test,
+        y_pred,
+        zero_division=0
+    )
+)
+
+
+# 10. CONFUSION MATRIX
+
+cm = confusion_matrix(
+    y_test,
+    y_pred,
+    labels=["ham", "spam"]
+)
+
+display = ConfusionMatrixDisplay(
+    confusion_matrix=cm,
+    display_labels=["Ham", "Spam"]
+)
+
+display.plot(cmap="Blues")
+
+plt.title("Spam Email Classifier - Confusion Matrix")
+plt.show()
+
+
+# 11. SAVE THE TRAINED MODEL
+
+joblib.dump(model, "spam_email_classifier.pkl")
+
+print("\nModel saved successfully!")
+print("File: spam_email_classifier.pkl")
+
+
+# 12. CREATE A FUNCTION TO PREDICT EMAILS
+
+def predict_email(email):
+
+    prediction = model.predict([email])[0]
+
+    probabilities = model.predict_proba([email])[0]
+
+    classes = model.classes_
+
+    confidence = probabilities[list(classes).index(prediction)] * 100
+
+    print("\n========== EMAIL PREDICTION ==========")
+
+    if prediction == "spam":
+        print("Result: SPAM EMAIL")
+    else:
+        print("Result: NOT SPAM (HAM)")
+
+    print("Confidence:", round(confidence, 2), "%")
+
+
+# 13. TEST WITH SAMPLE EMAILS
+
+email1 = """
+Congratulations! You have won a free prize.
+Click this link immediately to claim your reward.
+"""
+
+email2 = """
+Hello, please find the meeting notes attached.
+Let me know if you have any questions.
+"""
+
+print("\nTesting Sample Email 1:")
+predict_email(email1)
+
+print("\nTesting Sample Email 2:")
+predict_email(email2)
+
+
+# 14. TEST YOUR OWN EMAIL
+
+print("\n========== TRY YOUR OWN EMAIL ==========")
+
+user_email = input("Enter an email message: ")
+
+predict_email(user_email)
+
+
+# 15. PROJECT COMPLETED
+
+print("\n======================================")
+print("SPAM EMAIL CLASSIFIER")
+print("PROJECT COMPLETED SUCCESSFULLY!")
+print("======================================")
